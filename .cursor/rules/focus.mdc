@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+由于Windows 系统控制台编码问题。Windows 默认使用 GBK 编码，所以当你编写代码时注意在终端运行时不要出现字符编码问题。

@@ -1,12 +1,14 @@
 # 音频转录和总结工具
 
-一个Web应用，用于对音频文件进行文本提取和智能总结。使用OpenAI的Whisper API进行音频转录，使用GPT-4o-mini模型进行文本总结，支持流式输出。
+一个Web应用，用于对音频文件进行文本提取和智能总结，并支持基于转录内容的智能对话。使用OpenAI的Whisper API进行音频转录，使用GPT-4o-mini模型进行文本总结，集成LangChain框架实现RAG问答功能，支持流式输出。
 
 ## ✨ 功能特性
 
 - 🎤 **音频转录**: 使用OpenAI Whisper API将音频文件转换为文本
 - 📝 **智能总结**: 使用GPT-4o-mini模型对转录文本进行总结
-- 🌊 **流式输出**: 实时显示转录和总结结果，提供流畅的用户体验
+- 💬 **智能对话**: 基于音频转录内容进行问答对话（使用LangChain）
+- 🧠 **上下文理解**: 使用RAG技术，模型能准确回答关于转录内容的问题
+- 🌊 **流式输出**: 实时显示转录、总结和对话结果，提供流畅的用户体验
 - 🎨 **现代UI**: 简洁美观的前端界面，支持拖拽上传
 - 🚀 **Web界面**: 通过浏览器轻松使用，无需命令行操作
 
@@ -89,6 +91,8 @@ python -m http.server 8080
 2. 点击上传区域或拖拽音频文件到上传区域
 3. 点击"开始处理"按钮
 4. 实时查看转录和总结结果（流式输出）
+5. 转录完成后，在对话区域输入问题
+6. 模型会基于转录内容进行智能回答
 
 ## 🛠️ 技术栈
 
@@ -96,6 +100,8 @@ python -m http.server 8080
 
 - **FastAPI**: 现代化的Python Web框架，支持异步和流式响应
 - **OpenAI API**: Whisper和GPT-4o-mini模型
+- **LangChain**: 构建基于LLM的应用框架，实现RAG功能
+- **FAISS**: Facebook开源的向量数据库，用于高效检索
 - **SSE**: Server-Sent Events实现流式输出
 
 ### 前端
@@ -129,7 +135,7 @@ python -m http.server 8080
 
 ### POST `/process-with-summary`
 
-处理音频文件，返回流式响应（包含转录和总结）。
+处理音频文件，返回流式响应（包含转录、总结和会话ID）。
 
 **请求:**
 - Content-Type: `multipart/form-data`
@@ -141,8 +147,44 @@ python -m http.server 8080
   - `status`: 状态更新
   - `transcription`: 转录结果
   - `summary_chunk`: 总结片段（流式）
+  - `session_created`: 会话创建成功（包含session_id）
   - `complete`: 处理完成
   - `error`: 错误信息
+
+### POST `/chat`
+
+基于转录文本的对话接口（流式响应）。
+
+**请求:**
+- Content-Type: `application/json`
+- Body:
+```json
+{
+  "session_id": "会话ID",
+  "message": "用户问题"
+}
+```
+
+**响应:**
+- Content-Type: `text/event-stream`
+- SSE事件类型:
+  - `status`: 状态更新
+  - `chat_chunk`: 回答片段（流式）
+  - `complete`: 回答完成
+  - `error`: 错误信息
+
+### GET `/session/{session_id}`
+
+获取会话信息。
+
+**响应:**
+```json
+{
+  "session_id": "会话ID",
+  "transcription": "转录文本",
+  "chat_history_count": 2
+}
+```
 
 ## 💻 命令行版本
 
@@ -195,6 +237,14 @@ python main.py audio.mp3
 欢迎提交问题和改进建议！
 
 ## 🔄 更新日志
+
+### v3.0.0
+- ✨ 集成LangChain框架，实现智能对话功能
+- ✨ 支持基于转录文本的问答对话
+- ✨ 使用RAG技术实现上下文检索
+- ✨ 会话管理和历史记录功能
+- ✨ 对话界面支持流式输出
+- 🔧 添加FAISS向量数据库支持
 
 ### v2.0.0
 - ✨ 添加Web界面，支持文件上传

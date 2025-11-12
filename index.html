@@ -146,6 +146,15 @@
             height: 400px;
         }
 
+        .chat-section {
+            grid-column: 1 / -1;
+            display: none;
+        }
+
+        .chat-section.active {
+            display: block;
+        }
+
         .result-section h3 {
             color: #333;
             margin-bottom: 15px;
@@ -259,6 +268,109 @@
             display: block;
         }
 
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 500px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #e9ecef;
+        }
+
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            max-width: 85%;
+            word-wrap: break-word;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .chat-message.user {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .chat-message.assistant {
+            background: white;
+            color: #333;
+            border: 1px solid #e9ecef;
+            margin-right: auto;
+        }
+
+        .chat-message.system {
+            background: #e7f3ff;
+            color: #0c5460;
+            font-size: 0.9rem;
+            font-style: italic;
+            text-align: center;
+            margin: 10px auto;
+            max-width: 70%;
+        }
+
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .chat-input:focus {
+            border-color: #667eea;
+        }
+
+        .chat-send-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .chat-send-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .chat-send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 2rem;
@@ -270,6 +382,14 @@
 
             .upload-area {
                 padding: 30px 15px;
+            }
+
+            .chat-input-area {
+                flex-direction: column;
+            }
+
+            .chat-send-btn {
+                width: 100%;
             }
         }
     </style>
@@ -306,6 +426,29 @@
                     总结内容将显示在这里...
                 </div>
             </div>
+
+            <div class="card chat-section" id="chatSection">
+                <h3>💬 智能对话 - 基于转录内容问答</h3>
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-message system">
+                            转录完成后，你可以在这里对转录内容进行提问
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <input 
+                            type="text" 
+                            class="chat-input" 
+                            id="chatInput" 
+                            placeholder="输入你的问题..."
+                            disabled
+                        />
+                        <button class="chat-send-btn" id="chatSendBtn" disabled>
+                            发送
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="footer">
@@ -324,9 +467,14 @@
         const fileInfo = document.getElementById('fileInfo');
         const transcriptionContent = document.getElementById('transcriptionContent');
         const summaryContent = document.getElementById('summaryContent');
+        const chatSection = document.getElementById('chatSection');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const chatSendBtn = document.getElementById('chatSendBtn');
 
         let selectedFile = null;
         let eventSource = null;
+        let currentSessionId = null;
 
         // 上传区域事件
         uploadArea.addEventListener('click', () => {
@@ -519,6 +667,17 @@
                                             summaryContent.textContent += data.content;
                                             break;
 
+                                        case 'session_created':
+                                            currentSessionId = data.session_id;
+                                            console.log('会话创建成功:', currentSessionId);
+                                            // 启用对话功能
+                                            enableChat();
+                                            break;
+
+                                        case 'warning':
+                                            console.warn(data.message);
+                                            break;
+
                                         case 'complete':
                                             showStatus(`处理完成！文件名: ${data.filename}`, 'success');
                                             uploadArea.classList.remove('processing');
@@ -550,6 +709,173 @@
                 processBtn.textContent = '开始处理';
             }
         }
+
+        // 启用对话功能
+        async function enableChat() {
+            // 验证会话是否真的存在
+            try {
+                const verifyResponse = await fetch(`${API_BASE_URL}/session/${currentSessionId}`);
+                if (!verifyResponse.ok) {
+                    console.error('Session verification failed:', await verifyResponse.text());
+                    addChatMessage('system', '对话功能初始化失败，请重新上传音频文件');
+                    return;
+                }
+                const sessionData = await verifyResponse.json();
+                console.log('Session verified:', sessionData);
+            } catch (error) {
+                console.error('Session verification error:', error);
+                addChatMessage('system', '无法验证会话，请检查网络连接');
+                return;
+            }
+            
+            chatSection.classList.add('active');
+            chatInput.disabled = false;
+            chatSendBtn.disabled = false;
+            
+            // 清空欢迎消息
+            chatMessages.innerHTML = '';
+            
+            // 添加欢迎消息
+            addChatMessage('system', '对话功能已就绪！你可以基于转录内容提问了。');
+        }
+
+        // 添加聊天消息到界面
+        function addChatMessage(role, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${role}`;
+            messageDiv.textContent = content;
+            chatMessages.appendChild(messageDiv);
+            
+            // 滚动到底部
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 发送聊天消息
+        async function sendChatMessage() {
+            const message = chatInput.value.trim();
+            if (!message) {
+                return;
+            }
+            
+            if (!currentSessionId) {
+                addChatMessage('system', '会话未初始化，请重新上传音频文件');
+                return;
+            }
+
+            // 显示用户消息
+            addChatMessage('user', message);
+            
+            // 清空输入框
+            chatInput.value = '';
+            
+            // 禁用输入
+            chatInput.disabled = true;
+            chatSendBtn.disabled = true;
+
+            try {
+                console.log('Sending chat message with session_id:', currentSessionId);
+                
+                // 发送请求
+                const response = await fetch(`${API_BASE_URL}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: message
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Chat API error:', response.status, errorText);
+                    
+                    if (response.status === 404) {
+                        throw new Error('会话已过期或不存在，请重新上传音频文件');
+                    }
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                // 处理流式响应
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let assistantMessage = '';
+                let messageDiv = null;
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+
+                        // 保留不完整的行
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+
+                                    switch (data.type) {
+                                        case 'status':
+                                            // 可以显示状态，这里忽略
+                                            break;
+
+                                        case 'chat_chunk':
+                                            // 如果还没有创建消息div，创建一个
+                                            if (!messageDiv) {
+                                                messageDiv = document.createElement('div');
+                                                messageDiv.className = 'chat-message assistant';
+                                                chatMessages.appendChild(messageDiv);
+                                            }
+                                            assistantMessage += data.content;
+                                            messageDiv.textContent = assistantMessage;
+                                            // 滚动到底部
+                                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                                            break;
+
+                                        case 'complete':
+                                            // 完成
+                                            chatInput.disabled = false;
+                                            chatSendBtn.disabled = false;
+                                            chatInput.focus();
+                                            break;
+
+                                        case 'error':
+                                            addChatMessage('system', `错误: ${data.message}`);
+                                            chatInput.disabled = false;
+                                            chatSendBtn.disabled = false;
+                                            break;
+                                    }
+                                } catch (e) {
+                                    console.error('解析SSE数据失败:', e, line);
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    reader.releaseLock();
+                }
+
+            } catch (error) {
+                addChatMessage('system', `发送失败: ${error.message}`);
+                chatInput.disabled = false;
+                chatSendBtn.disabled = false;
+            }
+        }
+
+        // 对话相关事件监听
+        chatSendBtn.addEventListener('click', sendChatMessage);
+        
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !chatSendBtn.disabled) {
+                sendChatMessage();
+            }
+        });
 
         // 页面加载完成后的初始化
         document.addEventListener('DOMContentLoaded', () => {

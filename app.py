@@ -3,21 +3,32 @@
 """
 音频转录和总结Web服务
 使用FastAPI构建，支持文件上传和流式响应
+支持基于转录文本的对话功能
 """
 
 import os
 import asyncio
 import json
-from typing import Optional
+import uuid
+from typing import Optional, Dict, List
 from pathlib import Path
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
+
+# Langchain imports
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
 
 
 # 加载环境变量
@@ -29,6 +40,19 @@ if not API_KEY:
 
 # 初始化OpenAI客户端
 client = OpenAI(api_key=API_KEY)
+
+# 会话存储
+# 存储格式: {session_id: {transcription: str, vectorstore: FAISS, chat_history: List, last_access: datetime}}
+sessions: Dict[str, Dict] = {}
+
+# Pydantic模型
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+    
+class SessionResponse(BaseModel):
+    session_id: str
+    transcription: str
 
 
 @asynccontextmanager
@@ -55,6 +79,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def cleanup_old_sessions():
+    """清理超过1小时未使用的会话"""
+    current_time = datetime.now()
+    expired_sessions = []
+    
+    for session_id, session_data in sessions.items():
+        if current_time - session_data["last_access"] > timedelta(hours=1):
+            expired_sessions.append(session_id)
+    
+    for session_id in expired_sessions:
+        del sessions[session_id]
+    
+    if expired_sessions:
+        print(f"清理了 {len(expired_sessions)} 个过期会话")
+
+
+def create_vectorstore_from_text(text: str):
+    """从文本创建向量存储"""
+    # 分割文本
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
+    
+    # 创建embeddings和向量存储
+    embeddings = OpenAIEmbeddings(openai_api_key=API_KEY)
+    vectorstore = FAISS.from_texts(chunks, embeddings)
+    
+    return vectorstore
+
+
+def get_or_create_session(session_id: str, transcription: str = None):
+    """获取或创建会话"""
+    cleanup_old_sessions()
+    
+    if session_id not in sessions:
+        if not transcription:
+            raise ValueError("创建新会话时需要提供转录文本")
+        
+        # 创建向量存储
+        vectorstore = create_vectorstore_from_text(transcription)
+        
+        sessions[session_id] = {
+            "transcription": transcription,
+            "vectorstore": vectorstore,
+            "chat_history": [],  # 存储对话历史
+            "last_access": datetime.now()
+        }
+    else:
+        # 更新最后访问时间
+        sessions[session_id]["last_access"] = datetime.now()
+    
+    return sessions[session_id]
 
 
 async def transcribe_audio_async(audio_data: bytes, filename: str) -> str:
@@ -136,12 +217,14 @@ async def root():
     """API根路径，返回服务信息"""
     return {
         "name": "音频转录和总结API",
-        "version": "2.0.0",
-        "description": "使用OpenAI Whisper和GPT-4o-mini进行音频转录和智能总结",
+        "version": "3.0.0",
+        "description": "使用OpenAI Whisper和GPT-4o-mini进行音频转录和智能总结，支持对话功能",
         "endpoints": {
             "GET /": "API信息",
             "POST /process": "音频转录（不含总结）",
-            "POST /process-with-summary": "音频转录和流式总结"
+            "POST /process-with-summary": "音频转录和流式总结",
+            "POST /chat": "基于转录文本的对话",
+            "GET /session/{session_id}": "获取会话信息"
         }
     }
 
@@ -239,6 +322,24 @@ async def process_audio_with_summary(file: UploadFile = File(...)):
                 async for summary_event in summarize_text_stream(transcribed_text):
                     yield summary_event
 
+                # 创建会话ID
+                session_id = str(uuid.uuid4())
+                
+                # 创建会话（包含转录文本的向量存储）
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Preparing chat...'}, ensure_ascii=False)}\n\n"
+                try:
+                    get_or_create_session(session_id, transcribed_text)
+                    # 验证会话是否真的创建成功
+                    if session_id in sessions:
+                        yield f"data: {json.dumps({'type': 'session_created', 'session_id': session_id})}\n\n"
+                        print(f"Session created successfully: {session_id}")
+                    else:
+                        raise Exception("Session creation verification failed")
+                except Exception as e:
+                    error_msg = f"Failed to create session: {str(e)}"
+                    print(error_msg)
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Chat function initialization failed'})}\n\n"
+
                 # 发送完成状态
                 yield f"data: {json.dumps({'type': 'complete', 'filename': file.filename})}\n\n"
 
@@ -259,6 +360,153 @@ async def process_audio_with_summary(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+
+
+@app.get("/debug/sessions")
+async def debug_sessions():
+    """调试端点：查看所有活动会话"""
+    return {
+        "active_sessions": len(sessions),
+        "session_ids": list(sessions.keys()),
+        "sessions_detail": {
+            sid: {
+                "transcription_length": len(sdata["transcription"]),
+                "chat_history_count": len(sdata["chat_history"]),
+                "last_access": sdata["last_access"].isoformat()
+            }
+            for sid, sdata in sessions.items()
+        }
+    }
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """获取会话信息"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_data = sessions[session_id]
+    return {
+        "session_id": session_id,
+        "transcription": session_data["transcription"],
+        "chat_history_count": len(session_data["chat_history"]),
+        "exists": True
+    }
+
+
+@app.post("/chat")
+async def chat_with_context(request: ChatRequest):
+    """
+    基于转录文本的对话接口（流式响应）
+    
+    Args:
+        request: ChatRequest对象，包含session_id和message
+    
+    Returns:
+        SSE流式响应
+    """
+    # 调试信息
+    print(f"Chat request received - Session ID: {request.session_id}")
+    print(f"Current active sessions: {list(sessions.keys())}")
+    
+    # 检查会话是否存在
+    if request.session_id not in sessions:
+        error_detail = f"Session not found: {request.session_id}. Active sessions: {len(sessions)}"
+        print(error_detail)
+        raise HTTPException(status_code=404, detail="Session does not exist or has expired. Please upload audio again.")
+    
+    try:
+        session_data = get_or_create_session(request.session_id)
+        
+        async def generate_chat_response():
+            try:
+                # 创建LLM
+                llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    temperature=0.7,
+                    openai_api_key=API_KEY
+                )
+                
+                # 发送处理中状态
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Thinking...'}, ensure_ascii=False)}\n\n"
+                
+                # 从向量存储中检索相关文档
+                docs = await asyncio.to_thread(
+                    session_data["vectorstore"].similarity_search,
+                    request.message,
+                    k=3
+                )
+                
+                # 构建上下文
+                context = "\n\n".join([doc.page_content for doc in docs])
+                
+                # 构建对话历史
+                history_text = ""
+                for msg in session_data["chat_history"][-6:]:  # 只保留最近3轮对话
+                    if isinstance(msg, HumanMessage):
+                        history_text += f"User: {msg.content}\n"
+                    elif isinstance(msg, AIMessage):
+                        history_text += f"Assistant: {msg.content}\n"
+                
+                # 构建提示词
+                system_prompt = f"""You are a helpful assistant. Answer the user's question based on the following context from an audio transcription.
+
+Context:
+{context}
+
+Previous conversation:
+{history_text}
+
+Please provide a helpful and accurate answer based on the context. If the answer cannot be found in the context, say so."""
+                
+                # 调用LLM
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": request.message}
+                ]
+                
+                response = await asyncio.to_thread(
+                    client.chat.completions.create,
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.7
+                )
+                
+                answer = response.choices[0].message.content
+                
+                # 保存对话历史
+                session_data["chat_history"].append(HumanMessage(content=request.message))
+                session_data["chat_history"].append(AIMessage(content=answer))
+                
+                # 流式发送答案（模拟流式效果）
+                words = answer.split()
+                for i, word in enumerate(words):
+                    if i == 0:
+                        content = word
+                    else:
+                        content = " " + word
+                    yield f"data: {json.dumps({'type': 'chat_chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.02)
+                
+                # 发送完成状态
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                
+            except Exception as e:
+                error_msg = f"Chat failed: {str(e)}"
+                yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+        
+        return StreamingResponse(
+            generate_chat_response(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
 
 
 if __name__ == "__main__":
