@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音频转录和总结工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 30px;
+        }
+
+        @media (min-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .upload-section {
+            grid-column: 1 / -1;
+        }
+
+        .upload-area {
+            border: 3px dashed #ddd;
+            border-radius: 10px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.8);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area:hover,
+        .upload-area.dragover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .upload-area.processing {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        .upload-area.error {
+            border-color: #dc3545;
+            background: rgba(220, 53, 69, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            color: #667eea;
+            margin-bottom: 15px;
+            display: block;
+        }
+
+        .upload-text {
+            font-size: 1.1rem;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .upload-subtext {
+            font-size: 0.9rem;
+            color: #999;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .process-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .process-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .process-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-section {
+            height: 400px;
+        }
+
+        .result-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 5px;
+        }
+
+        .result-content {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            height: 320px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .result-content.empty {
+            color: #999;
+            font-style: italic;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: inherit;
+        }
+
+        .status-message {
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+
+        .status-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .typing-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #667eea;
+            animation: typing 1.4s infinite ease-in-out;
+            margin-left: 5px;
+        }
+
+        .typing-indicator:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 80%, 100% {
+                opacity: 0.3;
+                transform: scale(0.8);
+            }
+            40% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.9rem;
+        }
+
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        .file-info {
+            background: #e7f3ff;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .upload-area {
+                padding: 30px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 音频转录和总结工具</h1>
+            <p>使用AI技术将音频转换为文本，并生成智能总结</p>
+        </div>
+
+        <div class="main-content">
+            <div class="card upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">拖拽音频文件到此处，或点击选择文件</div>
+                    <div class="upload-subtext">支持格式: MP3, WAV, M4A, FLAC, OGG, WebM (最大25MB)</div>
+                    <input type="file" class="file-input" id="fileInput" accept="audio/*">
+                </div>
+                <div class="file-info" id="fileInfo"></div>
+                <button class="process-btn" id="processBtn">开始处理</button>
+            </div>
+
+            <div class="card result-section">
+                <h3>📝 转录文本</h3>
+                <div class="result-content empty" id="transcriptionContent">
+                    转录结果将显示在这里...
+                </div>
+            </div>
+
+            <div class="card result-section">
+                <h3>📋 智能总结</h3>
+                <div class="result-content empty" id="summaryContent">
+                    总结内容将显示在这里...
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Powered by OpenAI Whisper & GPT-4o-mini | <a href="https://github.com" target="_blank">查看源码</a></p>
+        </div>
+    </div>
+
+    <script>
+        // API配置
+        const API_BASE_URL = window.location.origin.includes('localhost') ? 'http://localhost:8000' : window.location.origin;
+
+        // DOM元素
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        const fileInfo = document.getElementById('fileInfo');
+        const transcriptionContent = document.getElementById('transcriptionContent');
+        const summaryContent = document.getElementById('summaryContent');
+
+        let selectedFile = null;
+        let eventSource = null;
+
+        // 上传区域事件
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        // 处理文件选择
+        function handleFileSelect(file) {
+            // 检查文件类型
+            const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/flac', 'audio/ogg', 'audio/webm'];
+            const allowedExtensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm'];
+
+            const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+            const isValidType = allowedTypes.includes(file.type) || allowedExtensions.includes(fileExt);
+
+            if (!isValidType) {
+                showError('不支持的文件格式。请上传音频文件 (MP3, WAV, M4A, FLAC, OGG, WebM)');
+                return;
+            }
+
+            // 检查文件大小 (25MB)
+            const maxSize = 25 * 1024 * 1024;
+            if (file.size > maxSize) {
+                showError('文件大小超过25MB限制');
+                return;
+            }
+
+            selectedFile = file;
+            updateFileInfo(file);
+            processBtn.style.display = 'inline-block';
+            uploadArea.classList.remove('error');
+        }
+
+        // 更新文件信息显示
+        function updateFileInfo(file) {
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            fileInfo.innerHTML = `
+                <strong>已选择文件:</strong> ${file.name}<br>
+                <strong>文件大小:</strong> ${sizeMB} MB<br>
+                <strong>文件类型:</strong> ${file.type || '未知'}
+            `;
+            fileInfo.classList.add('show');
+        }
+
+        // 显示错误信息
+        function showError(message) {
+            uploadArea.classList.add('error');
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'status-message status-error';
+            errorDiv.textContent = message;
+
+            // 移除之前的错误信息
+            const existingError = uploadArea.querySelector('.status-error');
+            if (existingError) {
+                existingError.remove();
+            }
+
+            uploadArea.appendChild(errorDiv);
+
+            // 3秒后自动移除错误信息
+            setTimeout(() => {
+                errorDiv.remove();
+                uploadArea.classList.remove('error');
+            }, 3000);
+        }
+
+        // 显示状态信息
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.createElement('div');
+            statusDiv.className = `status-message status-${type}`;
+            statusDiv.textContent = message;
+
+            // 移除之前的状态信息
+            const existingStatus = document.querySelector('.status-message');
+            if (existingStatus) {
+                existingStatus.remove();
+            }
+
+            document.querySelector('.upload-section').appendChild(statusDiv);
+
+            // 成功状态5秒后自动移除
+            if (type === 'success') {
+                setTimeout(() => {
+                    statusDiv.remove();
+                }, 5000);
+            }
+        }
+
+        // 处理按钮点击事件
+        processBtn.addEventListener('click', async () => {
+            if (!selectedFile) {
+                showError('请先选择音频文件');
+                return;
+            }
+
+            await processAudioFile();
+        });
+
+        // 处理音频文件
+        async function processAudioFile() {
+            try {
+                processBtn.disabled = true;
+                processBtn.textContent = '处理中...';
+                uploadArea.classList.add('processing');
+
+                // 清空之前的结果
+                transcriptionContent.textContent = '';
+                transcriptionContent.classList.add('empty');
+                summaryContent.textContent = '';
+                summaryContent.classList.add('empty');
+
+                showStatus('正在连接服务器...', 'info');
+
+                // 创建FormData
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                // 发送POST请求并处理流式响应
+                const response = await fetch(`${API_BASE_URL}/process-with-summary`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                // 处理流式响应
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+
+                        // 保留不完整的行
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6)); // 移除 'data: ' 前缀
+
+                                    switch (data.type) {
+                                        case 'status':
+                                            showStatus(data.message, 'info');
+                                            break;
+
+                                        case 'transcription':
+                                            transcriptionContent.textContent = data.content;
+                                            transcriptionContent.classList.remove('empty');
+                                            showStatus('转录完成，正在生成总结...', 'info');
+                                            break;
+
+                                        case 'summary_chunk':
+                                            if (summaryContent.classList.contains('empty')) {
+                                                summaryContent.textContent = '';
+                                                summaryContent.classList.remove('empty');
+                                            }
+                                            summaryContent.textContent += data.content;
+                                            break;
+
+                                        case 'complete':
+                                            showStatus(`处理完成！文件名: ${data.filename}`, 'success');
+                                            uploadArea.classList.remove('processing');
+                                            processBtn.disabled = false;
+                                            processBtn.textContent = '开始处理';
+                                            break;
+
+                                        case 'error':
+                                            showError(data.message);
+                                            uploadArea.classList.remove('processing');
+                                            processBtn.disabled = false;
+                                            processBtn.textContent = '开始处理';
+                                            break;
+                                    }
+                                } catch (e) {
+                                    console.error('解析SSE数据失败:', e, line);
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    reader.releaseLock();
+                }
+
+            } catch (error) {
+                showError(`处理失败: ${error.message}`);
+                uploadArea.classList.remove('processing');
+                processBtn.disabled = false;
+                processBtn.textContent = '开始处理';
+            }
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 检查服务器连接
+            fetch(`${API_BASE_URL}/`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('服务器连接成功:', data);
+                })
+                .catch(error => {
+                    console.error('服务器连接失败:', error);
+                    showError('无法连接到后端服务器，请确保服务器正在运行');
+                });
+        });
+    </script>
+</body>
+</html>
