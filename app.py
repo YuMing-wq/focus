@@ -14,6 +14,7 @@ from typing import Optional, Dict, List
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+import shutil
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
@@ -44,6 +45,15 @@ client = OpenAI(api_key=API_KEY)
 # 会话存储
 # 存储格式: {session_id: {transcription: str, vectorstore: FAISS, chat_history: List, last_access: datetime}}
 sessions: Dict[str, Dict] = {}
+
+# 历史记录配置
+HISTORY_DIR = Path("audio_history")
+HISTORY_FILE = HISTORY_DIR / "history.json"
+AUDIO_FILES_DIR = HISTORY_DIR / "audio_files"
+
+# 确保历史记录目录存在
+HISTORY_DIR.mkdir(exist_ok=True)
+AUDIO_FILES_DIR.mkdir(exist_ok=True)
 
 # Pydantic模型
 class ChatRequest(BaseModel):
@@ -79,6 +89,75 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def load_history() -> List[Dict]:
+    """加载历史记录"""
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading history: {e}")
+            return []
+    return []
+
+
+def save_history(history: List[Dict]):
+    """保存历史记录"""
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving history: {e}")
+
+
+def add_history_record(session_id: str, filename: str, transcription: str, summary: str):
+    """添加历史记录"""
+    history = load_history()
+    record = {
+        "session_id": session_id,
+        "filename": filename,
+        "upload_time": datetime.now().isoformat(),
+        "transcription": transcription,
+        "summary": summary,
+        "chat_history": []  # 初始化空的对话历史
+    }
+    history.insert(0, record)  # 新记录插入开头
+    save_history(history)
+    print(f"History record added: {session_id}")
+
+
+def update_chat_history(session_id: str, chat_history: List):
+    """更新会话的对话历史"""
+    history = load_history()
+    for record in history:
+        if record["session_id"] == session_id:
+            # 将消息对象转换为可序列化的字典
+            serializable_history = []
+            for msg in chat_history:
+                if isinstance(msg, (HumanMessage, AIMessage)):
+                    serializable_history.append({
+                        "type": msg.__class__.__name__,
+                        "content": msg.content
+                    })
+            record["chat_history"] = serializable_history
+            save_history(history)
+            print(f"Chat history updated for session: {session_id}")
+            return True
+    return False
+
+
+def delete_history_record(session_id: str):
+    """删除历史记录"""
+    history = load_history()
+    original_len = len(history)
+    history = [r for r in history if r["session_id"] != session_id]
+    if len(history) < original_len:
+        save_history(history)
+        print(f"History record deleted: {session_id}")
+        return True
+    return False
 
 
 def cleanup_old_sessions():
@@ -318,9 +397,18 @@ async def process_audio_with_summary(file: UploadFile = File(...)):
                 # 开始总结
                 yield f"data: {json.dumps({'type': 'status', 'message': '正在生成总结...'})}\n\n"
 
-                # 流式发送总结
+                # 收集总结内容
+                summary_text = ""
                 async for summary_event in summarize_text_stream(transcribed_text):
                     yield summary_event
+                    # 提取总结内容
+                    if summary_event.startswith('data: '):
+                        try:
+                            data = json.loads(summary_event[6:])
+                            if data.get('type') == 'summary_chunk':
+                                summary_text += data.get('content', '')
+                        except:
+                            pass
 
                 # 创建会话ID
                 session_id = str(uuid.uuid4())
@@ -333,6 +421,9 @@ async def process_audio_with_summary(file: UploadFile = File(...)):
                     if session_id in sessions:
                         yield f"data: {json.dumps({'type': 'session_created', 'session_id': session_id})}\n\n"
                         print(f"Session created successfully: {session_id}")
+                        
+                        # 保存到历史记录
+                        add_history_record(session_id, file.filename, transcribed_text, summary_text)
                     else:
                         raise Exception("Session creation verification failed")
                 except Exception as e:
@@ -360,6 +451,85 @@ async def process_audio_with_summary(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+
+
+@app.get("/api/history")
+async def get_history():
+    """获取所有历史记录"""
+    try:
+        history = load_history()
+        # 只返回列表信息，不返回完整内容
+        history_list = [
+            {
+                "session_id": record["session_id"],
+                "filename": record["filename"],
+                "upload_time": record["upload_time"],
+                "transcription_preview": record["transcription"][:100] + "..." if len(record["transcription"]) > 100 else record["transcription"]
+            }
+            for record in history
+        ]
+        return {"status": "success", "history": history_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {str(e)}")
+
+
+@app.get("/api/history/{session_id}")
+async def get_history_detail(session_id: str):
+    """获取特定会话的完整历史记录"""
+    try:
+        history = load_history()
+        for record in history:
+            if record["session_id"] == session_id:
+                # 尝试从内存中恢复会话
+                if session_id not in sessions:
+                    try:
+                        get_or_create_session(session_id, record["transcription"])
+                        # 恢复对话历史到内存
+                        if "chat_history" in record and record["chat_history"]:
+                            chat_history = []
+                            for msg_dict in record["chat_history"]:
+                                if msg_dict["type"] == "HumanMessage":
+                                    chat_history.append(HumanMessage(content=msg_dict["content"]))
+                                elif msg_dict["type"] == "AIMessage":
+                                    chat_history.append(AIMessage(content=msg_dict["content"]))
+                            sessions[session_id]["chat_history"] = chat_history
+                        print(f"Session restored from history: {session_id}")
+                    except Exception as e:
+                        print(f"Failed to restore session: {e}")
+                
+                return {
+                    "status": "success",
+                    "session_id": session_id,
+                    "filename": record["filename"],
+                    "upload_time": record["upload_time"],
+                    "transcription": record["transcription"],
+                    "summary": record["summary"],
+                    "chat_history": record.get("chat_history", []),
+                    "session_active": session_id in sessions
+                }
+        
+        raise HTTPException(status_code=404, detail="History record not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load history detail: {str(e)}")
+
+
+@app.delete("/api/history/{session_id}")
+async def delete_history(session_id: str):
+    """删除历史记录"""
+    try:
+        if delete_history_record(session_id):
+            # 同时从内存中删除会话
+            if session_id in sessions:
+                del sessions[session_id]
+            return {"status": "success", "message": "History record deleted"}
+        else:
+            raise HTTPException(status_code=404, detail="History record not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete history: {str(e)}")
 
 
 @app.get("/debug/sessions")
@@ -474,9 +644,12 @@ Please provide a helpful and accurate answer based on the context. If the answer
                 
                 answer = response.choices[0].message.content
                 
-                # 保存对话历史
+                # 保存对话历史到内存
                 session_data["chat_history"].append(HumanMessage(content=request.message))
                 session_data["chat_history"].append(AIMessage(content=answer))
+                
+                # 更新对话历史到持久化存储
+                update_chat_history(request.session_id, session_data["chat_history"])
                 
                 # 流式发送答案（模拟流式效果）
                 words = answer.split()

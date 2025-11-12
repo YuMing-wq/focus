@@ -20,9 +20,140 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 100%;
             margin: 0 auto;
             padding: 20px;
+            display: flex;
+            gap: 20px;
+        }
+
+        .main-area {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .history-sidebar {
+            width: 320px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+            position: sticky;
+            top: 20px;
+        }
+
+        .history-sidebar h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .history-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: white;
+            border-radius: 8px;
+            border: 2px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .history-item:hover {
+            border-color: #667eea;
+            transform: translateX(-3px);
+            box-shadow: 0 3px 10px rgba(102, 126, 234, 0.2);
+        }
+
+        .history-item.active {
+            border-color: #667eea;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+        }
+
+        .history-item-filename {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .history-item-time {
+            font-size: 0.75rem;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .history-item-preview {
+            font-size: 0.8rem;
+            color: #666;
+            line-height: 1.4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .history-empty {
+            text-align: center;
+            color: #999;
+            font-style: italic;
+            padding: 20px;
+        }
+
+        .new-audio-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+
+        .new-audio-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .history-item-delete {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.3s ease;
+            display: none;
+        }
+
+        .history-item {
+            position: relative;
+        }
+
+        .history-item:hover .history-item-delete {
+            display: block;
+        }
+
+        .history-item-delete:hover {
+            background: #c82333;
+            transform: scale(1.1);
         }
 
         .header {
@@ -396,12 +527,13 @@
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🎤 音频转录和总结工具</h1>
-            <p>使用AI技术将音频转换为文本，并生成智能总结</p>
-        </div>
+        <div class="main-area">
+            <div class="header">
+                <h1>🎤 音频转录和总结工具</h1>
+                <p>使用AI技术将音频转换为文本，并生成智能总结</p>
+            </div>
 
-        <div class="main-content">
+            <div class="main-content">
             <div class="card upload-section">
                 <div class="upload-area" id="uploadArea">
                     <div class="upload-icon">📁</div>
@@ -454,6 +586,15 @@
         <div class="footer">
             <p>Powered by OpenAI Whisper & GPT-4o-mini | <a href="https://github.com" target="_blank">查看源码</a></p>
         </div>
+        </div>
+
+        <div class="history-sidebar">
+            <h3>📚 历史记录</h3>
+            <button class="new-audio-btn" id="newAudioBtn">📤 上传新音频</button>
+            <div id="historyList">
+                <div class="history-empty">暂无历史记录</div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -471,6 +612,8 @@
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const chatSendBtn = document.getElementById('chatSendBtn');
+        const historyList = document.getElementById('historyList');
+        const newAudioBtn = document.getElementById('newAudioBtn');
 
         let selectedFile = null;
         let eventSource = null;
@@ -683,6 +826,8 @@
                                             uploadArea.classList.remove('processing');
                                             processBtn.disabled = false;
                                             processBtn.textContent = '开始处理';
+                                            // 刷新历史记录列表
+                                            loadHistory();
                                             break;
 
                                         case 'error':
@@ -868,6 +1013,70 @@
             }
         }
 
+        // 上传新音频按钮
+        newAudioBtn.addEventListener('click', () => {
+            // 清空当前内容
+            transcriptionContent.textContent = '转录结果将显示在这里...';
+            transcriptionContent.classList.add('empty');
+            summaryContent.textContent = '总结内容将显示在这里...';
+            summaryContent.classList.add('empty');
+            
+            // 清空对话
+            chatMessages.innerHTML = '';
+            chatSection.classList.remove('active');
+            chatInput.disabled = true;
+            chatSendBtn.disabled = true;
+            
+            // 清空上传信息
+            fileInfo.classList.remove('show');
+            processBtn.style.display = 'none';
+            
+            // 清除当前会话ID
+            currentSessionId = null;
+            
+            // 刷新历史记录列表（移除高亮）
+            loadHistory();
+            
+            // 滚动到顶部
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        // 删除历史记录
+        async function deleteHistoryRecord(sessionId) {
+            if (!confirm('确定要删除这条历史记录吗？')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/history/${sessionId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('删除失败');
+                }
+                
+                // 如果删除的是当前会话，清空显示
+                if (sessionId === currentSessionId) {
+                    currentSessionId = null;
+                    transcriptionContent.textContent = '转录结果将显示在这里...';
+                    transcriptionContent.classList.add('empty');
+                    summaryContent.textContent = '总结内容将显示在这里...';
+                    summaryContent.classList.add('empty');
+                    chatMessages.innerHTML = '';
+                    chatSection.classList.remove('active');
+                }
+                
+                // 刷新历史记录列表
+                loadHistory();
+                
+                console.log('History record deleted:', sessionId);
+            } catch (error) {
+                console.error('Error deleting history:', error);
+                alert('删除失败: ' + error.message);
+            }
+        }
+
         // 对话相关事件监听
         chatSendBtn.addEventListener('click', sendChatMessage);
         
@@ -877,6 +1086,128 @@
             }
         });
 
+        // 加载历史记录
+        async function loadHistory() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/history`);
+                if (!response.ok) {
+                    throw new Error('Failed to load history');
+                }
+                
+                const data = await response.json();
+                displayHistory(data.history);
+            } catch (error) {
+                console.error('Error loading history:', error);
+                historyList.innerHTML = '<div class="history-empty">加载历史记录失败</div>';
+            }
+        }
+
+        // 显示历史记录
+        function displayHistory(history) {
+            if (!history || history.length === 0) {
+                historyList.innerHTML = '<div class="history-empty">暂无历史记录</div>';
+                return;
+            }
+
+            historyList.innerHTML = '';
+            history.forEach(record => {
+                const item = document.createElement('div');
+                item.className = 'history-item';
+                if (record.session_id === currentSessionId) {
+                    item.classList.add('active');
+                }
+                
+                const uploadTime = new Date(record.upload_time);
+                const timeStr = uploadTime.toLocaleString('zh-CN', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'history-item-delete';
+                deleteBtn.innerHTML = '×';
+                deleteBtn.title = '删除此记录';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteHistoryRecord(record.session_id);
+                };
+
+                item.innerHTML = `
+                    <div class="history-item-filename">${record.filename}</div>
+                    <div class="history-item-time">${timeStr}</div>
+                    <div class="history-item-preview">${record.transcription_preview}</div>
+                `;
+                
+                item.appendChild(deleteBtn);
+                item.onclick = () => loadHistorySession(record.session_id);
+                historyList.appendChild(item);
+            });
+        }
+
+        // 加载历史会话
+        async function loadHistorySession(sessionId) {
+            try {
+                console.log('Loading history session:', sessionId);
+                
+                // 显示加载状态
+                transcriptionContent.textContent = '正在加载...';
+                summaryContent.textContent = '正在加载...';
+                
+                // 获取历史详情
+                const response = await fetch(`${API_BASE_URL}/api/history/${sessionId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to load session');
+                }
+                
+                const data = await response.json();
+                
+                // 设置当前会话ID
+                currentSessionId = data.session_id;
+                
+                // 显示转录和总结
+                transcriptionContent.textContent = data.transcription;
+                transcriptionContent.classList.remove('empty');
+                
+                summaryContent.textContent = data.summary;
+                summaryContent.classList.remove('empty');
+                
+                // 清空对话记录
+                chatMessages.innerHTML = '';
+                
+                // 恢复历史对话记录
+                if (data.chat_history && data.chat_history.length > 0) {
+                    data.chat_history.forEach(msg => {
+                        if (msg.type === 'HumanMessage') {
+                            addChatMessage('user', msg.content);
+                        } else if (msg.type === 'AIMessage') {
+                            addChatMessage('assistant', msg.content);
+                        }
+                    });
+                }
+                
+                // 启用对话功能
+                if (data.session_active) {
+                    await enableChat();
+                } else {
+                    addChatMessage('system', '会话已过期，正在重新初始化...');
+                    // 会话会在获取历史详情时自动恢复
+                    setTimeout(async () => {
+                        await enableChat();
+                    }, 1000);
+                }
+                
+                // 更新历史记录列表的active状态
+                loadHistory();
+                
+                console.log('History session loaded successfully');
+            } catch (error) {
+                console.error('Error loading history session:', error);
+                addChatMessage('system', `加载失败: ${error.message}`);
+            }
+        }
+
         // 页面加载完成后的初始化
         document.addEventListener('DOMContentLoaded', () => {
             // 检查服务器连接
@@ -884,6 +1215,8 @@
                 .then(response => response.json())
                 .then(data => {
                     console.log('服务器连接成功:', data);
+                    // 加载历史记录
+                    loadHistory();
                 })
                 .catch(error => {
                     console.error('服务器连接失败:', error);

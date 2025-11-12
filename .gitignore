@@ -29,3 +29,6 @@ Thumbs.db
 
 # 结果文件
 *_result.txt
+
+# 音频历史记录
+audio_history/
